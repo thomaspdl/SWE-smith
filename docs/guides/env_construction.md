@@ -1,4 +1,7 @@
-SWE-smith enables automatic construction of execution environments for repositories.
+# Build Environments
+
+SWE-smith enables automatic conversion of code repositories into reinforcement learning environments.
+
 We'll review the two steps of this process:
 
 1. SWE-agent + LM attempts to install a repository + run the testing suite.
@@ -14,7 +17,7 @@ Coming soon!
 !!! note "Python installation scripts"
 
     Early on in SWE-smith's development, we focused exclusively on Python repositories and wrote Python-specific scripts for automatic repo instllation.
-    More information [here](guides/env_construction_py.md)
+    More information [here](../guides/env_construction_py.md)
 
 ## Create an Execution Environment
 Run the following command to create a Docker image for the repository.
