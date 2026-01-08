@@ -20,13 +20,16 @@ from functools import cached_property
 from ghapi.all import GhApi
 from multiprocessing import Lock
 from pathlib import Path
-from swesmith.bug_gen.adapters import get_entities_from_file, SUPPORTED_EXTS
+
+# Note: swesmith.bug_gen.adapters is imported lazily in extract_entities() to avoid
+# loading tree-sitter dependencies when only using Registry/get_valid_report
 from swebench.harness.constants import (
     DOCKER_USER,
     DOCKER_WORKDIR,
     FAIL_TO_PASS,
     KEY_INSTANCE_ID,
 )
+from swesmith.bug_gen.adapters import get_entities_from_file, SUPPORTED_EXTS
 from swesmith.constants import (
     KEY_PATCH,
     LOG_DIR_ENV,
@@ -269,10 +272,18 @@ class RepoProfile(ABC, metaclass=SingletonMeta):
             )
         dest = self.repo_name if not dest else dest
         if not os.path.exists(dest):
+            token = os.getenv("GITHUB_TOKEN")
+            if token:
+                base_url = (
+                    f"https://x-access-token:{token}@github.com/{self.mirror_name}.git"
+                )
+            else:
+                base_url = f"git@github.com:{self.mirror_name}.git"
+
             clone_cmd = (
-                f"git clone git@github.com:{self.mirror_name}.git"
+                f"git clone {base_url}"
                 if dest is None
-                else f"git clone git@github.com:{self.mirror_name}.git {dest}"
+                else f"git clone {base_url} {dest}"
             )
             subprocess.run(
                 clone_cmd,

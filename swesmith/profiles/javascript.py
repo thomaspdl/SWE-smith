@@ -16,6 +16,40 @@ class JavaScriptProfile(RepoProfile):
 
     exts: list[str] = field(default_factory=lambda: [".js"])
 
+    def extract_entities(
+        self,
+        dirs_exclude: list[str] = None,
+        dirs_include: list[str] = [],
+        exclude_tests: bool = True,
+        max_entities: int = -1,
+    ) -> list:
+        """
+        Override to exclude JavaScript build artifacts by default.
+
+        JavaScript projects often have build/dist directories that contain
+        transpiled/bundled code. We should only analyze source files.
+        """
+        if dirs_exclude is None:
+            # Default exclusions for JavaScript projects
+            dirs_exclude = [
+                "dist",
+                "build",
+                "node_modules",
+                "coverage",
+                ".next",
+                "out",
+                "examples",
+                "docs",
+                "bin",
+            ]
+
+        return super().extract_entities(
+            dirs_exclude=dirs_exclude,
+            dirs_include=dirs_include,
+            exclude_tests=exclude_tests,
+            max_entities=max_entities,
+        )
+
 
 def default_npm_install_dockerfile(mirror_name: str, node_version: str = "18") -> str:
     return f"""FROM node:{node_version}-bullseye
@@ -54,24 +88,36 @@ def parse_log_jest(log: str) -> dict[str, str]:
 
 def parse_log_mocha(log: str) -> dict[str, str]:
     test_status_map = {}
-    pattern = r"^\s*(✔|✖|-)\s(.+?)(?:\s\((\d+\s*m?s)\))?$"
+    # Pattern for checkmark/x/dash style output
+    # Note: Match both ✓ (U+2713) and ✔ (U+2714) checkmarks as different Mocha versions use different symbols
+    pattern = r"^\s*([✓✔]|✖|-)\s(.+?)(?:\s\((\d+\s*m?s)\))?$"
+    # Pattern for numbered failures like "1) test name" or "1) should solve..."
+    fail_pattern = r"^\s*\d+\)\s+(.+?)(?:\s\((\d+\s*m?s)\))?$"
     for line in log.split("\n"):
         match = re.match(pattern, line.strip())
         if match:
             status_symbol, test_name, _duration = match.groups()
-            if status_symbol == "✔":
+            if status_symbol in ("✓", "✔"):
                 test_status_map[test_name] = TestStatus.PASSED.value
             elif status_symbol == "✖":
                 test_status_map[test_name] = TestStatus.FAILED.value
             elif status_symbol == "-":
                 test_status_map[test_name] = TestStatus.SKIPPED.value
+        else:
+            # Try numbered failure pattern
+            fail_match = re.match(fail_pattern, line.strip())
+            if fail_match:
+                test_name = fail_match.group(1)
+                test_status_map[test_name] = TestStatus.FAILED.value
     return test_status_map
 
 
 def parse_log_vitest(log: str) -> dict[str, str]:
     test_status_map = {}
     patterns = [
+        # Vitest uses ✓ for passing test files and ❯ for test files with failures
         (r"^✓\s+(.+?)(?:\s+\([\.\d]+ms\))?$", TestStatus.PASSED.value),
+        (r"^❯\s+(.+?)(?:\s+\(.*?\))?$", TestStatus.FAILED.value),  # Failed test files
         (r"^✗\s+(.+?)(?:\s+\([\.\d]+ms\))?$", TestStatus.FAILED.value),
         (r"^○\s+(.+?)(?:\s+\([\.\d]+ms\))?$", TestStatus.SKIPPED.value),
         (r"^✓\s+(.+?)$", TestStatus.PASSED.value),
@@ -83,6 +129,11 @@ def parse_log_vitest(log: str) -> dict[str, str]:
             match = re.match(pattern, line.strip())
             if match:
                 test_name = match.group(1).strip()
+                # Normalize test file names: extract just the file path before parentheses
+                # e.g., "test/foo.test.js (9 tests)" -> "test/foo.test.js"
+                # or "test/foo.test.js (9 tests | 5 failed) 22ms" -> "test/foo.test.js"
+                if "(" in test_name:
+                    test_name = test_name.split("(")[0].strip()
                 test_status_map[test_name] = status
                 break
 
@@ -537,7 +588,7 @@ class Qd180f4a0(JavaScriptProfile):
     owner: str = "kriskowal"
     repo: str = "q"
     commit: str = "d180f4a0b22499607ac750b56766c8829d6bff43"
-    test_cmd: str = "npm run test -- --verbose"
+    test_cmd: str = "npm run test -- --verbose --reporter spec"
 
     @property
     def dockerfile(self):
@@ -745,7 +796,7 @@ class Mathjs04e6e2d7(JavaScriptProfile):
     owner: str = "josdejong"
     repo: str = "mathjs"
     commit: str = "04e6e2d7a949d6ddc7d7139bf1e3a88e6fe5365b"
-    test_cmd: str = "npm run test:src -- --verbose"
+    test_cmd: str = "npm run test:src -- --reporter spec"
 
     @property
     def dockerfile(self):
@@ -802,7 +853,7 @@ RUN npm install
 CMD ["/bin/bash"]"""
 
     def log_parser(self, log: str) -> dict[str, str]:
-        return parse_log_mocha(log)  # Default fallback
+        return parse_log_qunit(log)
 
 
 @dataclass
@@ -967,7 +1018,7 @@ RUN npx playwright install --with-deps chromium
 CMD ["/bin/bash"]"""
 
     def log_parser(self, log: str) -> dict[str, str]:
-        return parse_log_jest(log)
+        return parse_log_karma(log)
 
 
 @dataclass
@@ -1230,7 +1281,7 @@ class Modernizr1d4c9cee(JavaScriptProfile):
     owner: str = "Modernizr"
     repo: str = "Modernizr"
     commit: str = "1d4c9cee1f358f50c31be9a1f247e1153ed9143c"
-    test_cmd: str = "npm test -- --verbose"
+    test_cmd: str = "npm test -- --verbose --reporter spec"
 
     @property
     def dockerfile(self):
@@ -1294,7 +1345,7 @@ class Pm2ff1ca974(JavaScriptProfile):
     owner: str = "Unitech"
     repo: str = "pm2"
     commit: str = "ff1ca974afada8730aa55f8ed1df40e700cedbcb"
-    test_cmd: str = "npm run test:unit"
+    test_cmd: str = "npm run test:unit -- --reporter spec"
 
     @property
     def dockerfile(self):
@@ -1370,7 +1421,7 @@ RUN npm install
 CMD ["/bin/bash"]"""
 
     def log_parser(self, log: str) -> dict[str, str]:
-        return parse_log_jest(log)
+        return parse_log_mocha(log)
 
 
 @dataclass
@@ -1514,7 +1565,7 @@ RUN npm install
 CMD ["/bin/bash"]"""
 
     def log_parser(self, log: str) -> dict[str, str]:
-        return parse_log_jest(log)
+        return parse_log_mocha(log)
 
 
 @dataclass
@@ -1566,7 +1617,7 @@ RUN npm run build
 CMD ["/bin/bash"]"""
 
     def log_parser(self, log: str) -> dict[str, str]:
-        return parse_log_jest(log)
+        return parse_log_mocha(log)
 
 
 @dataclass
@@ -1982,7 +2033,7 @@ RUN sed -i "s/'-f'/'-a', '[\"--no-sandbox\"]', '-f'/" tests/test.js
 CMD ["/bin/bash"]"""
 
     def log_parser(self, log: str) -> dict[str, str]:
-        return parse_log_jest(log)
+        return parse_log_mocha(log)
 
 
 @dataclass
@@ -2057,7 +2108,7 @@ RUN npm install
 CMD ["/bin/bash"]"""
 
     def log_parser(self, log: str) -> dict[str, str]:
-        return parse_log_jest(log)
+        return parse_log_mocha(log)
 
 
 @dataclass
@@ -2260,7 +2311,7 @@ RUN npm install
 CMD ["/bin/bash"]"""
 
     def log_parser(self, log: str) -> dict[str, str]:
-        return parse_log_jest(log)
+        return parse_log_mocha(log)
 
 
 @dataclass
@@ -2393,6 +2444,7 @@ class Ws726c3732(JavaScriptProfile):
     repo: str = "ws"
     commit: str = "726c3732b3e5319219ed73cac4826fd36917e2e1"
     test_cmd: str = "npm test -- --reporter spec"
+    timeout: int = 300
 
     @property
     def dockerfile(self):
@@ -2408,7 +2460,7 @@ RUN npm install
 CMD ["/bin/bash"]"""
 
     def log_parser(self, log: str) -> dict[str, str]:
-        return parse_log_jest(log)
+        return parse_log_mocha(log)
 
 
 # Register all JavaScript profiles with the global registry
